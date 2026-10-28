@@ -47,6 +47,10 @@ pub struct Tab {
     pub n: u32,
     pub logn: u32,
     pub crt_inv: u32,
+    /// Nonzero: spectra stay in swz order between `dif` and `dit` (see `at` and `swizzled`);
+    /// `steps` sets it, the host passes 0 (`mul_slots` relies on that: its `pointwise_const`
+    /// operand b is a natural-order spectrum).
+    pub swz: u32,
 }
 
 /// Tables of the wraparound path (spec section 9) for transform length h = L/4: `tab` at length
@@ -75,8 +79,8 @@ fn mul1(a: u32, b: u32) -> u32 {
     let s = (t as u32 & P1) + (t >> 31) as u32;
     if s >= P1 { s - P1 } else { s }
 }
-/// t mod M31, canonical, for t < 2^63 − 2^33 (so t >> 31 < 2^32 − 4 and the folded sum
-/// is at most 2 · M31).
+/// t mod M31, canonical, for t < 2^63 (so t >> 31 < 2^32 and the folded sum is at most
+/// 2 · M31 + 1, which two subtractions reduce).
 #[inline(always)]
 fn red1(t: u64) -> u32 {
     let hi = (t >> 31) as u32;
@@ -112,7 +116,8 @@ fn csub1(a: F1, b: F1) -> F1 {
 }
 #[inline(always)]
 fn cmul1(a: F1, b: F1) -> F1 {
-    // Each part is a sum of two products of factors at most M31, reduced once.
+    // Each part is a sum of two products of canonical factors (P1 − b.im at most M31),
+    // reduced once.
     let m = |x: u32, y: u32| x as u64 * y as u64;
     F1 { re: red1(m(a.re, b.re) + m(a.im, P1 - b.im)), im: red1(m(a.re, b.im) + m(a.im, b.re)) }
 }
@@ -241,35 +246,96 @@ impl Gf for F2 {
 /// Two DIF stages on a[i0 + {0, q, 2q, 3q}] (spans 2q and q) as one radix-4 butterfly, with
 /// twiddles w1 = W^j, w2 = W^2j and w3 = W^3j of the block's 4q-th root W. W^q = i in both
 /// fields, so the result equals two radix-2 stages with three multiplications instead of four.
+/// With `UNIT` (q = 1, so j = 0) every twiddle is 1 and w1, w2, w3 are unused. `SIN` and
+/// `SOUT` read and write element i at swz(i) (see `at`).
 #[inline(always)]
-unsafe fn dif4<T: Gf>(a: *mut T, i0: usize, q: usize, w1: T, w2: T, w3: T) {
+unsafe fn dif4<T: Gf, const UNIT: bool, const SIN: bool, const SOUT: bool>(a: *mut T, i0: usize, q: usize, w1: T, w2: T, w3: T) {
+    let mul = |y: T, w: T| if UNIT { y } else { y.mul(w) };
+    let (r, w) = (|k: usize| at::<SIN>(i0 + k * q), |k: usize| at::<SOUT>(i0 + k * q));
     unsafe {
-        let (x0, x1, x2, x3) = (*a.add(i0), *a.add(i0 + q), *a.add(i0 + 2 * q), *a.add(i0 + 3 * q));
+        let (x0, x1, x2, x3) = (*a.add(r(0)), *a.add(r(1)), *a.add(r(2)), *a.add(r(3)));
         let (y0, y1, y2, y3) = (x0.add(x2), x1.add(x3), x0.sub(x2), x1.sub(x3));
-        *a.add(i0) = y0.add(y1);
-        *a.add(i0 + q) = y0.sub(y1).mul(w2);
-        *a.add(i0 + 2 * q) = y2.add_i(y3).mul(w1);
-        *a.add(i0 + 3 * q) = y2.sub_i(y3).mul(w3);
+        fence::<SIN, SOUT>();
+        *a.add(w(0)) = y0.add(y1);
+        *a.add(w(1)) = mul(y0.sub(y1), w2);
+        *a.add(w(2)) = mul(y2.add_i(y3), w1);
+        *a.add(w(3)) = mul(y2.sub_i(y3), w3);
     }
 }
 
 /// Two DIT stages on a[i0 + {0, q, 2q, 3q}] (spans q and 2q) as one radix-4 butterfly, with
-/// twiddles w1 = V^j, w2 = V^2j and w3 = V^3j of the block's inverse root V, V^q = −i.
+/// twiddles w1 = V^j, w2 = V^2j and w3 = V^3j of the block's inverse root V, V^q = −i; `UNIT`,
+/// `SIN` and `SOUT` as for `dif4`.
 #[inline(always)]
-unsafe fn dit4<T: Gf>(a: *mut T, i0: usize, q: usize, w1: T, w2: T, w3: T) {
+unsafe fn dit4<T: Gf, const UNIT: bool, const SIN: bool, const SOUT: bool>(a: *mut T, i0: usize, q: usize, w1: T, w2: T, w3: T) {
+    let mul = |y: T, w: T| if UNIT { y } else { y.mul(w) };
+    let (r, w) = (|k: usize| at::<SIN>(i0 + k * q), |k: usize| at::<SOUT>(i0 + k * q));
     unsafe {
-        let (x0, x1, x2, x3) = (*a.add(i0), (*a.add(i0 + q)).mul(w2), (*a.add(i0 + 2 * q)).mul(w1), (*a.add(i0 + 3 * q)).mul(w3));
+        let (x0, x1, x2, x3) = (*a.add(r(0)), mul(*a.add(r(1)), w2), mul(*a.add(r(2)), w1), mul(*a.add(r(3)), w3));
         let (y0, y1, y2, y3) = (x0.add(x1), x0.sub(x1), x2.add(x3), x2.sub(x3));
-        *a.add(i0) = y0.add(y2);
-        *a.add(i0 + 2 * q) = y0.sub(y2);
-        *a.add(i0 + q) = y1.sub_i(y3);
-        *a.add(i0 + 3 * q) = y1.add_i(y3);
+        fence::<SIN, SOUT>();
+        *a.add(w(0)) = y0.add(y2);
+        *a.add(w(2)) = y0.sub(y2);
+        *a.add(w(1)) = y1.sub_i(y3);
+        *a.add(w(3)) = y1.add_i(y3);
     }
 }
 
-/// Decimation in frequency, natural order in, bit-reversed order out. With `TILED` (global
-/// mode) the stages that act within blocks of at most 2^TILE_LOG elements run on tiles in
-/// shared memory (see `tiles`).
+/// swz(i) = i ^ (((i >> 3) ^ (i >> 4)) & 7) when `S`, else i. swz permutes each aligned block
+/// of 8 elements and is its own inverse. In that order the span-1 radix-4 pass (each thread's
+/// 4 elements contiguous) reads and writes shared memory without bank conflicts, and the span-4
+/// pass with half as many. With an even number of stages these are the last DIF and the first
+/// DIT passes, so when `swizzled` the spectrum stays in swz order between `dif` and `dit`.
+#[inline(always)]
+fn at<const S: bool>(i: usize) -> usize {
+    if S { i ^ (((i >> 3) ^ (i >> 4)) & 7) } else { i }
+}
+
+/// Spectra of `t` in swz order: `Tab::swz` set and log₂ n even and at least 4 (every DIF and
+/// DIT stage range that ends or starts at log₂ n then holds both passes).
+#[inline(always)]
+fn swizzled(t: &Tab) -> bool {
+    t.swz != 0 && t.logn % 2 == 0 && t.logn >= 4
+}
+
+/// Between a radix-4 group's reads and writes when their orders differ: the writes can land on
+/// elements that the group's other lanes (span 4: four consecutive lanes share 16 elements)
+/// have yet to read.
+#[inline(always)]
+fn fence<const SIN: bool, const SOUT: bool>() {
+    if SIN != SOUT {
+        warp::sync_mask(0xf << (thread::threadIdx_x() % 32 & !3));
+    }
+}
+
+/// One radix-4 pass over the first `len` elements: DIF stages with second span q = 2^lq, or DIT
+/// stages with first span q; `UNIT`, `SIN` and `SOUT` as for `dif4`.
+#[inline(always)]
+unsafe fn pass4<const DIF: bool, const UNIT: bool, const SIN: bool, const SOUT: bool>(a1: *mut F1, a2: *mut F2, t: &Tab, lq: u32, len: u32) {
+    thread::sync_threads();
+    let q = 1u32 << lq;
+    let mut b = thread::threadIdx_x();
+    while b < len >> 2 {
+        let j = b & (q - 1);
+        let i0 = (((b >> lq) << (lq + 2)) + j) as usize;
+        let w1 = (2 * t.n - 6 * q + j) as usize;
+        let (w2, w3) = (w1 + q as usize, w1 + 2 * q as usize);
+        unsafe {
+            if DIF {
+                dif4::<_, UNIT, SIN, SOUT>(a1, i0, q as usize, *t.tw1.add(w1), *t.tw1.add(w2), *t.tw1.add(w3));
+                dif4::<_, UNIT, SIN, SOUT>(a2, i0, q as usize, *t.tw2.add(w1), *t.tw2.add(w2), *t.tw2.add(w3));
+            } else {
+                dit4::<_, UNIT, SIN, SOUT>(a1, i0, q as usize, *t.itw1.add(w1), *t.itw1.add(w2), *t.itw1.add(w3));
+                dit4::<_, UNIT, SIN, SOUT>(a2, i0, q as usize, *t.itw2.add(w1), *t.itw2.add(w2), *t.itw2.add(w3));
+            }
+        }
+        b += thread::blockDim_x();
+    }
+}
+
+/// Decimation in frequency, natural order in, bit-reversed order out (swz order when
+/// `swizzled`, see `at`). With `TILED` (global mode) the stages that act within blocks of at
+/// most 2^TILE_LOG elements run on tiles in shared memory (see `tiles`).
 #[inline(always)]
 unsafe fn dif<const TILED: bool>(a1: *mut F1, a2: *mut F2, t: &Tab) {
     unsafe {
@@ -282,25 +348,21 @@ unsafe fn dif<const TILED: bool>(a1: *mut F1, a2: *mut F2, t: &Tab) {
 /// count is odd, which must then be stage log₂ n − 1.
 #[inline(always)]
 unsafe fn dif_stages(a1: *mut F1, a2: *mut F2, t: &Tab, s_from: u32, s_to: u32, len: u32) {
-    let quarter = len >> 2;
+    // When `swizzled` and the stages end at log₂ n, the last two passes (spans 4 and 1, the
+    // latter with unit twiddles) leave swz order.
+    let swz = s_to == t.logn && s_to - s_from >= 4 && swizzled(t);
+    let end = if swz { s_to - 4 } else { s_to };
     let mut s = s_from;
-    while s + 2 <= s_to {
-        thread::sync_threads();
-        let lq = t.logn - 2 - s; // log2 of the second stage's span q
-        let q = 1u32 << lq;
-        let mut b = thread::threadIdx_x();
-        while b < quarter {
-            let j = b & (q - 1);
-            let i0 = (((b >> lq) << (lq + 2)) + j) as usize;
-            let w1 = (2 * t.n - 6 * q + j) as usize;
-            let (w2, w3) = (w1 + q as usize, w1 + 2 * q as usize);
-            unsafe {
-                dif4(a1, i0, q as usize, *t.tw1.add(w1), *t.tw1.add(w2), *t.tw1.add(w3));
-                dif4(a2, i0, q as usize, *t.tw2.add(w1), *t.tw2.add(w2), *t.tw2.add(w3));
-            }
-            b += thread::blockDim_x();
-        }
+    while s + 2 <= end {
+        unsafe { pass4::<true, false, false, false>(a1, a2, t, t.logn - 2 - s, len) };
         s += 2;
+    }
+    if swz {
+        unsafe {
+            pass4::<true, false, false, true>(a1, a2, t, 2, len);
+            pass4::<true, true, true, true>(a1, a2, t, 0, len);
+        }
+        s = s_to;
     }
     if s < s_to {
         // Stage log₂ n − 1: span 1, twiddle tw[0] = 1.
@@ -322,7 +384,8 @@ unsafe fn dif_stages(a1: *mut F1, a2: *mut F2, t: &Tab, s_from: u32, s_to: u32, 
     thread::sync_threads();
 }
 
-/// Decimation in time, bit-reversed order in, natural order out, then unweighting by ζ^−j / n.
+/// Decimation in time, bit-reversed order in (swz order when `swizzled`, see `at`), natural
+/// order out, then unweighting by ζ^−j / n.
 #[inline(always)]
 unsafe fn dit<const TILED: bool>(a1: *mut F1, a2: *mut F2, t: &Tab) {
     unsafe { dit_raw::<TILED>(a1, a2, t) };
@@ -351,24 +414,18 @@ unsafe fn dit_raw<const TILED: bool>(a1: *mut F1, a2: *mut F2, t: &Tab) {
 /// stage s_lo when the count is odd.
 #[inline(always)]
 unsafe fn dit_stages(a1: *mut F1, a2: *mut F2, t: &Tab, s_hi: u32, s_lo: u32, len: u32) {
-    let quarter = len >> 2;
+    // When `swizzled` and the stages start at log₂ n, the first two passes take swz order (see
+    // `dif_stages`).
     let mut s = s_hi;
-    while s >= s_lo + 2 {
-        thread::sync_threads();
-        let lq = t.logn - s; // log2 of the first stage's span q (stage s − 1)
-        let q = 1u32 << lq;
-        let mut b = thread::threadIdx_x();
-        while b < quarter {
-            let j = b & (q - 1);
-            let i0 = (((b >> lq) << (lq + 2)) + j) as usize;
-            let w1 = (2 * t.n - 6 * q + j) as usize;
-            let (w2, w3) = (w1 + q as usize, w1 + 2 * q as usize);
-            unsafe {
-                dit4(a1, i0, q as usize, *t.itw1.add(w1), *t.itw1.add(w2), *t.itw1.add(w3));
-                dit4(a2, i0, q as usize, *t.itw2.add(w1), *t.itw2.add(w2), *t.itw2.add(w3));
-            }
-            b += thread::blockDim_x();
+    if s_hi == t.logn && s_hi - s_lo >= 4 && swizzled(t) {
+        unsafe {
+            pass4::<false, true, true, true>(a1, a2, t, 0, len);
+            pass4::<false, false, true, false>(a1, a2, t, 2, len);
         }
+        s -= 4;
+    }
+    while s >= s_lo + 2 {
+        unsafe { pass4::<false, false, false, false>(a1, a2, t, t.logn - s, len) };
         s -= 2;
     }
     if s == s_lo + 1 {
@@ -654,15 +711,17 @@ unsafe fn carry_product(a1: *const F1, a2: *const F2, count: u32, out: *mut u32,
     unsafe { block_carry(coef, count, out, scratch) }
 }
 
-/// a ← a ⊙ b elementwise.
+/// a ← a ⊙ b elementwise, with a in swz order (`at`) when `swizzled` and b in natural order.
 #[inline(always)]
 unsafe fn pointwise_const(a1: *mut F1, a2: *mut F2, b1: *const F1, b2: *const F2, t: &Tab) {
+    let swz = swizzled(t);
     let mut j = thread::threadIdx_x();
     while j < t.n {
         let i = j as usize;
+        let ib = if swz { at::<true>(i) } else { i };
         unsafe {
-            *a1.add(i) = cmul1(*a1.add(i), *b1.add(i));
-            *a2.add(i) = cmul2(*a2.add(i), *b2.add(i));
+            *a1.add(i) = cmul1(*a1.add(i), *b1.add(ib));
+            *a2.add(i) = cmul2(*a2.add(i), *b2.add(ib));
         }
         j += thread::blockDim_x();
     }
@@ -678,7 +737,8 @@ pub struct Slots {
     /// 2n limbs per slot each, for T and S.
     pub lim_t: *mut u32,
     pub lim_s: *mut u32,
-    /// n elements per slot each, F(N) and F(N′).
+    /// n elements per slot each: F(N), or the wraparound path's factors A | B
+    /// (`cpu::half_factors_of`), and F(N′).
     pub nhat1: *const F1,
     pub nhat2: *const F2,
     pub nphat1: *const F1,
@@ -827,6 +887,8 @@ unsafe fn square<const TILED: bool>(a1: *mut F1, a2: *mut F2, scratch: *mut u64,
 /// below is inlined, so each mode compiles to address-space-specific loads and stores.
 #[inline(always)]
 unsafe fn steps<const BARE: bool, const SHARED: bool, const WRAP: bool>(t: &Tab, ht: &HalfTab, s: &Slots, first: u32, bits: u32) {
+    // Length-n spectra stay in swz order between `dif` and `dit` (the half path's do not).
+    let t = &Tab { swz: 1, ..*t };
     let slot = (first + thread::blockIdx_x()) as usize;
     let n = t.n as usize;
     let (a1, a2, scratch): (*mut F1, *mut F2, *mut u64) = if SHARED {

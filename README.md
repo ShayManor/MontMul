@@ -85,7 +85,7 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
-Swap `Gmp::default()` for `Cpu::default()` or `Gpu::new()?` (feature `gpu`) to change backend. Slots hold values in Montgomery form; `load` and `read` convert on the host. `mul(out, a, b)` multiplies two slots that share a modulus, and `is_one(i)` checks the PRP result without leaving Montgomery form.
+Swap `Gmp::default()` for `Cpu::default()` or `Gpu::new()?` (feature `gpu`) to change backend, or for `Multi::new(Gpu::all()?)` to use every visible GPU. Slots hold values in Montgomery form; `load` and `read` convert on the host. `mul(out, a, b)` multiplies two slots that share a modulus, and `is_one(i)` checks the PRP result without leaving Montgomery form.
 
 ## CLI
 
@@ -95,27 +95,29 @@ generalmodulo prp   --index N --backend cpu|gpu|gmp
 generalmodulo score --backend cpu|gpu|gmp [--slots S] [--label TEXT] [--ncu]
 ```
 
-`bench` times `K` steps on `S` random `B`-bit moduli after a 16-step warm-up and prints one `key=value` line (µs per slot-step, bit-steps per second); `--csv` appends the same fields to a file. `--bare` (GPU only) times the squaring alone, without the reduction. `prp` runs a Fermat base-3 test on the tribonacci number T(N). `score` measures the efficiency score below, prints it and appends it to `figures/score_<device>.csv`; on the GPU it also reports the reduction overhead (time of a full step over a bare one), and `--ncu` adds Nsight Compute SM and memory throughput.
+`bench` times `K` steps on `S` random `B`-bit moduli after a 16-step warm-up and prints one `key=value` line (µs per slot-step, bit-steps per second); `--csv` appends the same fields to a file. `--bare` (GPU only) times the squaring alone, without the reduction. `prp` runs a Fermat base-3 test on the tribonacci number T(N). `score` measures the efficiency score below, prints it and appends it to `figures/score_<device>.csv`; on the GPU it also reports the reduction overhead (time of a full step over a bare one), and `--ncu` adds Nsight Compute SM and memory throughput. The `gpu` backend uses every visible device (`CUDA_VISIBLE_DEVICES` selects them); `--bare`, the reduction overhead and `--ncu` use device 0.
 
 ## Tests
 
 | command | backend | duration |
 |-|-|-|
-| `cargo test --release -- --include-ignored` | `Cpu`, `Gmp`, score, CLI, unit tests | about 25 s on an M5 Mac, including the build |
-| `cargo test --release --features gpu --test gpu` | `Gpu` | about 30 min on either GPU |
+| `cargo test --release -- --include-ignored` | `Cpu`, `Gmp`, `Multi`, score, CLI, unit tests | about 25 s on an M5 Mac, including the build |
+| `cargo test --release --features gpu --test gpu` | `Gpu`, `Multi<Gpu>` | about 30 min on either GPU |
 | `cargo test --release --features gpu --test gpu -- --ignored tribonacci_prp_96879` | `Gpu` on T(96879) | about 11 s on the 5090 |
 
 Every suite checks against GMP through `rug`. The shared cases in `tests/common/mod.rs` cover the exactness bound with all-ones limbs at maximum k for every L, random modular steps with c = 1 and c = base, the edge values x = 0, N, 2N − 1 and N with k · w = b + 4, identical results across slot positions and batch sizes, full exponentiations and `mul` against `pow_mod`, carry stress with N = 2^b − 1, and Fermat tests on tribonacci numbers, where the primes listed in OEIS A092835 must report PRP. The GPU suite also compares transforms and final raw limbs against `Cpu` bit for bit, global mode against shared mode, and runs split across launches, and it checks the out-of-memory error and that dropped batches free device memory. The GPU suite is slow because the GMP references run on the host.
 
 ## Efficiency score
 
-The score is the median, over 5 repeats, of modular squarings per second on a fixed workload: random 100,000-bit odd moduli (L = 8,192, seed 2026), base 3, and an exponent of the top 2,000 bits of N − 1 in every slot, after a 64-step warm-up. Without `--slots`, the slot count is the best of the logical core count × {1, 2} on the CPU, or the SM count × {1, 2, 4, 8, 16} that fit in device memory on the GPU. Slot 0, the last slot and two seeded random slots must match `pow_mod`, or no score is reported. Alongside it come the median absolute deviation (MAD), Fermat tests per hour at 100,000 bits, and the equivalent count of M5 cores running `Gmp` (2.709 · 10⁻⁴ s per squaring for one slot on one M5 performance core). A change is accepted only if its median beats the previous one by at least 2 % and by more than twice the larger MAD.
+The score is the median, over 5 repeats, of modular squarings per second on a fixed workload: random 100,000-bit odd moduli (L = 8,192, seed 2026), base 3, and an exponent of the top 2,000 bits of N − 1 in every slot, after a 64-step warm-up. Without `--slots`, the slot count is the best of the logical core count × {1, 2} on the CPU, or the SM count over all GPUs × {1, 2, 4, 8, 16} that fit in device memory. Slot 0, the last slot and two seeded random slots must match `pow_mod`, or no score is reported. Alongside it come the median absolute deviation (MAD), Fermat tests per hour at 100,000 bits, and the equivalent count of M5 cores running `Gmp` (2.709 · 10⁻⁴ s per squaring for one slot on one M5 performance core). A change is accepted only if its median beats the previous one by at least 2 % and by more than twice the larger MAD.
 
 ## Design notes
 
 **Parameter rules.** A b-bit modulus takes k = ⌈(b + 4)/32⌉ limbs of 32 bits and the smallest transform length L ≥ 2k, and all moduli in a batch must share L. The wraparound correction needs k = L/2, so the GPU (on by default) and `Cpu::with_wraparound(true)` widen k to that. Registration fails unless c · k · (2^32 − 1)² < Q, where Q ≈ 2^92 is the product of the transform moduli. Inputs and outputs stay in the lazy range [0, 2N), which holds when R ≥ 4cN. The rule k · 32 ≥ b + 4 gives R ≥ 16N, so the base c is at most 4.
 
 **GPU execution model.** One thread block owns one slot and runs whole steps, reading its exponent bits on the device. In shared mode the full transform vector (24 bytes per complex element) sits in shared memory. Larger vectors run in global mode, where each transform runs its first stages in global memory and the rest on tiles of up to 2,048 elements copied into shared memory, one global round trip per tile instead of one per radix-4 pass. `run` splits work into launches of about `GpuOptions::max_launch_ms` (200 ms by default), sized from the measured time per slot-step of the previous launch, so the 3060's display watchdog never fires.
+
+**Multiple GPUs.** `Multi` splits a batch's slots into contiguous shards of near-equal size, one per inner backend, and runs each shard on its own host thread. A `mul` whose slots lie in different shards runs on the host with `rug`.
 
 **Known limitations.**
 
@@ -126,12 +128,13 @@ The score is the median, over 5 repeats, of modular squarings per second on a fi
 
 ## Results
 
-Efficiency at 100,000-bit moduli, base 3, best slot count per device. The full Fermat column times complete tests (exponent N − 1, setup included) whose residues match `rug` `pow_mod` on the checked slots.
+Efficiency at 100,000-bit moduli, base 3, best slot count per device.
 
-| configuration | slots | modular squarings/s | Fermat tests/hour (score) | Fermat tests/hour (full test) | M5 GMP cores equivalent |
-|-|-|-|-|-|-|
-| RTX 5090 (`Gpu`) | 170 | 1,190,003 | 42,840 | 41,345 | 322 |
-| RTX 3060 (`Gpu`) | 448 | 118,722 | 4,274 | 4,220 | 32 |
-| Apple M5, all cores (`Gmp`) | 20 | 20,968 | 755 | | 5.7 |
+| configuration | slots | modular squarings/s | Fermat tests/hour | M5 GMP cores equivalent |
+|-|-|-|-|-|
+| 4 × RTX 5090 (`Multi<Gpu>`) | 1,360 | 5,554,081 | 199,947 | 1,505 |
+| RTX 5090 (`Gpu`) | 170 | 1,536,441 | 55,312 | 416 |
+| RTX 3060 (`Gpu`) | 448 | 141,550 | 5,096 | 38 |
+| Apple M5, all cores (`Gmp`) | 20 | 20,968 | 755 | 5.7 |
 
-The M5 row was measured with other applications running (load average about 9).
+Throughput grows linearly with the GPU count: on one host with four 5090s capped at 420 W, 2, 3 and 4 GPUs run at 2.02, 3.04 and 4.03 times the single-GPU rate of that host (mean of two runs). The single 5090 row comes from a different host at the stock power limit. The M5 row was measured with other applications running (load average about 9).

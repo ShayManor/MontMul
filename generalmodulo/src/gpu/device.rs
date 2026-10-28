@@ -52,6 +52,7 @@ struct Tab {
     n: u32,
     logn: u32,
     crt_inv: u32,
+    swz: u32,
 }
 
 // SAFETY: `repr(C)` integers, passed by value.
@@ -173,6 +174,11 @@ impl Device {
         Ok(Device { ctx, stream, _module: module, functions })
     }
 
+    /// Number of visible CUDA devices.
+    pub fn count() -> anyhow::Result<usize> {
+        Ok(CudaContext::device_count()? as usize)
+    }
+
     pub fn name(&self) -> String {
         self.ctx.name().unwrap_or_else(|e| panic!("device name: {e}"))
     }
@@ -220,6 +226,7 @@ impl Device {
             n: t.n as u32,
             logn: t.n.trailing_zeros(),
             crt_inv: crt_inv(),
+            swz: 0,
         };
         DeviceTables { tab, _f1: f1, _f2: f2 }
     }
@@ -473,7 +480,6 @@ impl Device {
     }
 }
 
-/// The fused kernels need whole warps and at most 1,024 threads (see `plan`).
 /// Twiddles r^t for t < n/2 (r^(n/2) = −1) as the kernels read them: the table itself, then
 /// for each radix-4 pass with lower stage σ (q = n/2^(σ+2), from offset 2n − 6q) the runs R^j,
 /// R^2j and R^3j over j < q, R = r^(2^σ), so that each pass reads them contiguously. The
@@ -494,6 +500,7 @@ fn radix4_twiddles<F: Elem>(v: &[F]) -> Vec<F> {
     out
 }
 
+/// The fused kernels need whole warps and at most 1,024 threads (see `plan`).
 fn check_threads(threads: u32) {
     assert!(threads.is_multiple_of(32) && threads <= 1024, "{threads} threads per block");
 }

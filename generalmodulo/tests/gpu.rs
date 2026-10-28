@@ -2,7 +2,7 @@
 
 mod common;
 use common::*;
-use generalmodulo::{Backend, Cpu, Gpu, GpuOptions, ModBatch, Transform};
+use generalmodulo::{Backend, Cpu, Gpu, GpuOptions, ModBatch, Multi, Transform};
 use rug::Integer;
 use rug::rand::RandState;
 use std::sync::{RwLock, RwLockReadGuard};
@@ -268,7 +268,7 @@ fn structured_modulus_carries() {
 
 /// x = R − 1 lies outside [0, 2N), so T = 4 · (R − 1)² carries out of 2k limbs; `err` must
 /// name slot 1.
-fn carry_overflow(make: impl Fn() -> Gpu, bits: u32) {
+fn carry_overflow<B: Backend>(make: impl Fn() -> B, bits: u32) {
     let mut rng = RandState::new();
     let moduli = vec![rand_odd(&mut rng, bits), rand_odd(&mut rng, bits)];
     let mut b = ModBatch::new(make(), &moduli, 4).unwrap();
@@ -334,10 +334,41 @@ fn without_wraparound() {
     let _g = shared();
     assert_same_raw(gpu_nowrap, Cpu::default, 100_000, 8, 100);
     assert_same_raw(gpu_nowrap_global, Cpu::default, 87_914, 8, 50);
+    // Naturally global and swizzled: n = 16,384, tiles from stage 4.
+    assert_same_raw(gpu_nowrap, Cpu::default, 400_000, 2, 20);
     powmod_and_mul(gpu_nowrap, 2000, 9);
     random_modmul(gpu_nowrap, 1000, 100, 1000, 3);
     random_modmul(gpu_nowrap, 100_000, 8, 100_000, 4);
     edges(gpu_nowrap, 3);
     edges(gpu_nowrap, 4);
     carry_stress(gpu_nowrap, 1 << 16);
+}
+
+#[test]
+fn multi_two_contexts_on_one_device() {
+    let _g = shared();
+    let two = || Multi::new(vec![gpu(), gpu()]);
+    for slots in [1, 5, 16] {
+        assert_same_raw(two, || Cpu::with_wraparound(true), 87_914, slots, 50);
+    }
+    assert_same_raw(two, || Cpu::with_wraparound(true), 1000, 7, 100);
+    powmod_and_mul(two, 2000, 9);
+    end_to_end(two, &[6, 7, 11, 87, 98, 215, 802, 1001, 2000, 4000]);
+}
+
+#[test]
+fn multi_all_devices() {
+    let _g = shared();
+    let all = || Multi::new(Gpu::all().unwrap());
+    assert_eq!(all().parts().len(), Gpu::device_count().unwrap());
+    assert_same_raw(all, || Cpu::with_wraparound(true), 87_914, 13, 50);
+    long_run(all, 87_914, 32, 2_000);
+}
+
+#[test]
+#[should_panic(expected = "shard 1, slot 1")]
+fn multi_carry_overflow_names_the_global_slot() {
+    let _g = shared();
+    // Slot 1 is slot 0 of shard 1.
+    carry_overflow(|| Multi::new(vec![gpu(), gpu()]), 1000);
 }

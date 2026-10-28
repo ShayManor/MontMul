@@ -17,7 +17,7 @@ use std::str::FromStr;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "gpu")]
-use generalmodulo::gpu::Gpu;
+use generalmodulo::{Multi, gpu::Gpu};
 
 /// Per subcommand: the `--key value` options, then the bare `--flag`s it accepts.
 fn allowed(cmd: &str) -> (&'static [&'static str], &'static [&'static str]) {
@@ -75,17 +75,22 @@ macro_rules! with_backend {
             "cpu" => $f(Cpu::default, $($arg),*),
             "gmp" => $f(Gmp::default, $($arg),*),
             #[cfg(feature = "gpu")]
-            "gpu" => $f(|| Gpu::new().expect("CUDA device"), $($arg),*),
+            "gpu" => $f(|| Multi::new(Gpu::all().expect("CUDA device")), $($arg),*),
             other => bail!("unknown or unavailable backend {other}"),
         }
     };
 }
 
-/// Device name with whitespace replaced by `_`, so it fits a `key=value` field and a file name.
-fn device(backend: &str) -> Result<String> {
+/// Device name with whitespace replaced by `_`, so it fits a `key=value` field and a file name;
+/// prefixed with the device count (`2x `) when the gpu backend uses several devices (`all`).
+#[allow(unused_variables)]
+fn device(backend: &str, all: bool) -> Result<String> {
     let name = match backend {
         #[cfg(feature = "gpu")]
-        "gpu" => Gpu::new()?.device_name(),
+        "gpu" => match if all { Gpu::device_count()? } else { 1 } {
+            1 => Gpu::new()?.device_name(),
+            g => format!("{g}x {}", Gpu::new()?.device_name()),
+        },
         _ => cpu_model(),
     };
     Ok(name.split_whitespace().collect::<Vec<_>>().join("_").replace(',', ""))
@@ -191,19 +196,19 @@ fn score_at<B: Backend>(make: impl Fn() -> B, slots: Option<usize>, candidates: 
     score(&make, &ScoreConfig::standard(slots))
 }
 
-/// Candidate slot counts for `best_slots`: logical cores × {1, 2} on the CPU; SMs × {1, 2, 4, 8, 16}
-/// on the GPU, keeping only batches that fit in device memory.
+/// Candidate slot counts for `best_slots`: logical cores × {1, 2} on the CPU; SMs over all devices
+/// × {1, 2, 4, 8, 16} on the GPU, keeping only batches that fit in device memory.
 fn candidates(backend: &str) -> Result<Vec<usize>> {
     let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
     match backend {
         #[cfg(feature = "gpu")]
         "gpu" => {
-            let sms = Gpu::new()?.sm_count() as usize;
+            let sms: usize = Gpu::all()?.iter().map(Gpu::sm_count).sum();
             let (moduli, _) = generalmodulo::score::workload(&ScoreConfig::standard(1))?;
             Ok([1, 2, 4, 8, 16]
                 .map(|f| f * sms)
                 .into_iter()
-                .filter(|&s| Gpu::new().is_ok_and(|g| ModBatch::new(g, &vec![moduli[0].clone(); s], 3).is_ok()))
+                .filter(|&s| Gpu::all().is_ok_and(|g| ModBatch::new(Multi::new(g), &vec![moduli[0].clone(); s], 3).is_ok()))
                 .collect())
         }
         _ => Ok(vec![cores, 2 * cores]),
@@ -249,10 +254,12 @@ fn run_score(args: &Args) -> Result<()> {
     let mut s = with_backend!(backend, score_at(slots, &cands))?;
     #[cfg(feature = "gpu")]
     let (sm_pct, mem_pct) = if backend == "gpu" {
-        let cfg = ScoreConfig::standard(s.slots);
+        // Device 0 alone, at the slot count it ran in the score.
+        let per_device = s.slots.div_ceil(Gpu::device_count()?);
+        let cfg = ScoreConfig::standard(per_device);
         s.overhead = Some(generalmodulo::score::gpu_overhead(|| Gpu::new().expect("CUDA device"), &cfg)?);
         // A failed profile (e.g. no counter access) leaves the columns empty and keeps the score.
-        match args.flag("ncu").then(|| ncu_metrics(s.slots)) {
+        match args.flag("ncu").then(|| ncu_metrics(per_device)) {
             Some(Ok((sm, mem))) => (Some(sm), Some(mem)),
             Some(Err(e)) => {
                 eprintln!("warning: ncu profile failed, sm_pct and mem_pct left empty: {e:#}");
@@ -265,7 +272,7 @@ fn run_score(args: &Args) -> Result<()> {
     };
     #[cfg(not(feature = "gpu"))]
     let (sm_pct, mem_pct) = (None, None);
-    let device = device(backend)?;
+    let device = device(backend, true)?;
     let opt = |v: Option<f64>| v.map(|x| format!("{x:.4}")).unwrap_or_default();
     let gmp_core_equiv = Some(s.modsq_per_s * GMP_M5_SECONDS_PER_MODSQ_100K);
     let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
@@ -298,7 +305,7 @@ fn main() -> Result<()> {
             let backend = args.get("backend").context("missing --backend")?;
             let o = BenchOpts {
                 backend: backend.to_string(),
-                device: device(backend)?,
+                device: device(backend, !args.flag("bare"))?,
                 bits: args.num("bits")?,
                 slots: args.num("slots")?,
                 steps: args.num("steps")?,

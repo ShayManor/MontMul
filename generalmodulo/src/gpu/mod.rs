@@ -66,6 +66,16 @@ impl Gpu {
         Ok(Gpu { dev, opts, max_dyn_smem, lengths, tables: Mutex::new(HashMap::new()) })
     }
 
+    /// Number of visible CUDA devices (`CUDA_VISIBLE_DEVICES` selects them).
+    pub fn device_count() -> anyhow::Result<usize> {
+        Device::count()
+    }
+
+    /// One `Gpu` with default options per visible device, for `Multi`.
+    pub fn all() -> anyhow::Result<Vec<Gpu>> {
+        (0..Self::device_count()?).map(|device| Self::with_options(GpuOptions { device, ..Default::default() })).collect()
+    }
+
     pub fn options(&self) -> GpuOptions {
         self.opts
     }
@@ -316,9 +326,10 @@ impl Backend for Gpu {
         let (k, n, slots) = (st.k, st.len / 2, st.n.len());
         let plan = plan::plan(n, self.max_dyn_smem, self.opts.force_global);
         let global = plan.mode == Mode::Global;
-        // Slot state, tables (3n elements per field), the staged N, N′ limbs, exponents of up to
-        // k words per slot (N − 1 for a Fermat test), and a margin for allocation granularity.
-        let need = SlotBufs::bytes(slots, k, n, global) + 72 * n + 8 * slots * k + 4 * slots * k + (64 << 20);
+        // Slot state, tables (6n elements per field, half that again for the wraparound path),
+        // the staged N, N′ limbs, exponents of up to k words per slot (N − 1 for a Fermat test),
+        // and a margin for allocation granularity.
+        let need = SlotBufs::bytes(slots, k, n, global) + 216 * n + 8 * slots * k + 4 * slots * k + (64 << 20);
         let free = self.dev.free_memory();
         ensure!(need <= free, "batch needs {need} bytes, {free} free");
         let tab = self.tables(st.len);
