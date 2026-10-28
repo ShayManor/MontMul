@@ -15,8 +15,8 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
-/// PTX of the `generalmodulo-kernels` crate, compiled by `build.rs`.
-const PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/generalmodulo_kernels.ptx"));
+/// PTX of the `montmul-kernels` crate, compiled by `build.rs`.
+const PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/montmul_kernels.ptx"));
 const KERNELS: [&str; 9] =
     ["t_forward", "t_inverse", "t_pointwise", "t_load_forward", "run_steps", "run_steps_global", "run_bare", "run_bare_global", "mul_slots"];
 /// Dynamic shared memory a launch may use without the per-function opt-in.

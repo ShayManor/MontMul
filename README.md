@@ -1,12 +1,12 @@
-# GeneralModulo
+# MontMul
 
-GeneralModulo computes `x ← x² · c mod N` and `a · b mod N` for many independent odd moduli N at once. This modular squaring is the inner step of a Fermat probable-prime test `3^(N−1) mod N`, which runs one step per bit of N. N has no special form, so every step uses Montgomery reduction. Each product is an exact convolution through an M31 × M61 number-theoretic transform over GF(p²) (a right-angle convolution), and the reduction applies the wraparound correction, which halves the transform length of the last product.
+MontMul computes `x ← x² · c mod N` and `a · b mod N` for many independent odd moduli N at once. This modular squaring is the inner step of a Fermat probable-prime test `3^(N−1) mod N`, which runs one step per bit of N. N has no special form, so every step uses Montgomery reduction. Each product is an exact convolution through an M31 × M61 number-theoretic transform over GF(p²) (a right-angle convolution), and the reduction applies the wraparound correction, which halves the transform length of the last product.
 
-The Rust crate lives in `generalmodulo/` and has three backends behind one host API, `ModBatch`:
+The Rust crate lives in `montmul/` and has three backends behind one host API, `ModBatch`:
 
 | backend | what it is |
 |-|-|
-| `Gpu` | CUDA kernels written in Rust (`generalmodulo/kernels/`), compiled to PTX by NVIDIA's cuda-oxide and launched through cudarc |
+| `Gpu` | CUDA kernels written in Rust (`montmul/kernels/`), compiled to PTX by NVIDIA's cuda-oxide and launched through cudarc |
 | `Cpu` | the same NTT in plain Rust, threaded over slots; the semantics authority that the GPU must match bit for bit |
 | `Gmp` | the Montgomery step on `rug` integers, with no transform |
 
@@ -20,7 +20,7 @@ The Rust crate lives in `generalmodulo/` and has three backends behind one host 
 
 ## Building
 
-All commands run in `generalmodulo/`.
+All commands run in `montmul/`.
 
 Without a GPU (macOS or Linux), the crate builds on plain stable Rust:
 
@@ -44,7 +44,7 @@ export CUDA_TOOLKIT_PATH=/usr/local/cuda-13.0 PATH=/usr/local/cuda-13.0/bin:/usr
 git clone https://github.com/NVlabs/cuda-oxide ~/cuda-oxide
 cd ~/cuda-oxide && git checkout a4a939a9b5f01f3bf712e92386922e1bc7c434a9
 cargo +1.99.1 install --locked --path cuda-oxide/crates/cargo-oxide
-cd <repo>/generalmodulo/kernels && cargo oxide doctor   # expect "Environment looks good!"
+cd <repo>/montmul/kernels && cargo oxide doctor   # expect "Environment looks good!"
 ```
 
 GMP needs `m4`. The export line must be in effect for every later build. On a host without root, install the CUDA 13 toolkit with its runfile (`--toolkit --installpath=$HOME/cuda-13`) and the LLVM 21 release tarball under `$HOME`, then point the same variables there. Run `cargo oxide doctor` inside `kernels/`, because the cuda-oxide checkout pins a different toolchain at its root.
@@ -60,7 +60,7 @@ With feature `gpu`, `build.rs` runs `cargo oxide build` in `kernels/` and embeds
 ## Library usage
 
 ```rust
-use generalmodulo::{Gmp, ModBatch, fermat};
+use montmul::{Gmp, ModBatch, fermat};
 use rug::Integer;
 
 fn main() -> anyhow::Result<()> {
@@ -90,9 +90,9 @@ Swap `Gmp::default()` for `Cpu::default()` or `Gpu::new()?` (feature `gpu`) to c
 ## CLI
 
 ```
-generalmodulo bench --backend cpu|gpu|gmp --bits B --slots S --steps K [--bare] [--csv PATH]
-generalmodulo prp   --index N --backend cpu|gpu|gmp
-generalmodulo score --backend cpu|gpu|gmp [--slots S] [--label TEXT] [--ncu]
+montmul bench --backend cpu|gpu|gmp --bits B --slots S --steps K [--bare] [--csv PATH]
+montmul prp   --index N --backend cpu|gpu|gmp
+montmul score --backend cpu|gpu|gmp [--slots S] [--label TEXT] [--ncu]
 ```
 
 `bench` times `K` steps on `S` random `B`-bit moduli after a 16-step warm-up and prints one `key=value` line (µs per slot-step, bit-steps per second); `--csv` appends the same fields to a file. `--bare` (GPU only) times the squaring alone, without the reduction. `prp` runs a Fermat base-3 test on the tribonacci number T(N). `score` measures the efficiency score below, prints it and appends it to `figures/score_<device>.csv`; on the GPU it also reports the reduction overhead (time of a full step over a bare one), and `--ncu` adds Nsight Compute SM and memory throughput. The `gpu` backend uses every visible device (`CUDA_VISIBLE_DEVICES` selects them); `--bare`, the reduction overhead and `--ncu` use device 0.

@@ -2,7 +2,7 @@
 
 mod common;
 use common::*;
-use generalmodulo::{Backend, Cpu, Gpu, GpuOptions, ModBatch, Multi, Transform};
+use montmul::{Backend, Cpu, Gpu, GpuOptions, ModBatch, Multi, Transform};
 use rug::Integer;
 use rug::rand::RandState;
 use std::sync::{RwLock, RwLockReadGuard};
@@ -161,8 +161,8 @@ fn global_mode_matches_shared_mode() {
         g.plan_of(st).mode
     };
     let n = vec![rand_odd(&mut RandState::new(), 87_914)];
-    assert_eq!(modes(&mut ModBatch::new(gpu(), &n, 3).unwrap()), generalmodulo::gpu::plan::Mode::Shared);
-    assert_eq!(modes(&mut ModBatch::new(gpu_global(), &n, 3).unwrap()), generalmodulo::gpu::plan::Mode::Global);
+    assert_eq!(modes(&mut ModBatch::new(gpu(), &n, 3).unwrap()), montmul::gpu::plan::Mode::Shared);
+    assert_eq!(modes(&mut ModBatch::new(gpu_global(), &n, 3).unwrap()), montmul::gpu::plan::Mode::Global);
     assert_same_raw(gpu, gpu_global, 87_914, 16, 300);
 }
 

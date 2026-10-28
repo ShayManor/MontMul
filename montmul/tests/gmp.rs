@@ -1,6 +1,6 @@
 mod common;
 use common::*;
-use generalmodulo::{Cpu, Gmp};
+use montmul::{Cpu, Gmp};
 
 #[test]
 fn random_modmul_sizes() {

@@ -4,7 +4,7 @@
 """Hill-climb log: accepted changes as a line in time order, rejected attempts as grey dots,
 y = modsq_per_s with MAD error bars.
 
-Usage: plot_score.py CSV OUT.png   (CSV from `generalmodulo score`)
+Usage: plot_score.py CSV OUT.png   (CSV from `montmul score`)
 """
 import csv
 import sys

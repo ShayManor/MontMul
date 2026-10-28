@@ -1,9 +1,9 @@
 //! Backend-generic correctness tests (spec section 10); every check compares against GMP.
 #![allow(dead_code)]
 
-use generalmodulo::batch::{from_limbs, to_limbs};
-pub use generalmodulo::seq::tribonacci;
-use generalmodulo::{Backend, ModBatch, Params, Transform};
+use montmul::batch::{from_limbs, to_limbs};
+pub use montmul::seq::tribonacci;
+use montmul::{Backend, ModBatch, Params, Transform};
 use rug::rand::RandState;
 use rug::{Assign, Integer};
 
@@ -273,7 +273,7 @@ pub fn end_to_end<B: Backend>(make: impl Fn() -> B, ns: &[usize]) {
         groups.entry(Params::for_bits(m.significant_bits(), &lengths).unwrap().len).or_default().push(m);
     }
     for (_, ms) in groups {
-        let got = generalmodulo::fermat(make(), &ms, 3, 500).unwrap();
+        let got = montmul::fermat(make(), &ms, 3, 500).unwrap();
         for (m, g) in ms.iter().zip(got) {
             let want = Integer::from(3).pow_mod(&(m.clone() - 1u32), m).unwrap() == 1;
             assert_eq!(g, want, "T with {} bits", m.significant_bits());
@@ -294,7 +294,7 @@ pub fn known_prps<B: Backend>(make: impl Fn() -> B, prime_ns: &[usize], composit
         if t.is_even() {
             continue;
         }
-        let got = generalmodulo::fermat(make(), &[t.clone()], 3, 1 << 20).unwrap();
+        let got = montmul::fermat(make(), &[t.clone()], 3, 1 << 20).unwrap();
         assert_eq!(got[0], want, "T({n})");
     }
 }

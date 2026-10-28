@@ -6,7 +6,7 @@
 # Usage: scripts/scaling.sh [G]
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-bin="$root/generalmodulo/target/release/generalmodulo"
+bin="$root/montmul/target/release/montmul"
 IFS=, read -ra devs <<<"${CUDA_VISIBLE_DEVICES:-$(nvidia-smi --query-gpu=index --format=csv,noheader | paste -sd, -)}"
 gpus="${1:-${#devs[@]}}"
 csv=""

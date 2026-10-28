@@ -1,6 +1,6 @@
 mod common;
 use common::*;
-use generalmodulo::{Cpu, ModBatch, fermat};
+use montmul::{Cpu, ModBatch, fermat};
 use rug::Integer;
 
 #[test]

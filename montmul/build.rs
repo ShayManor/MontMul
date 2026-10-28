@@ -36,7 +36,7 @@ fn main() {
     }
     cmd.env("CARGO_TARGET_DIR", &target).env("CUDA_OXIDE_PTX_DIR", &out);
     // A stale PTX must not pass the existence check below.
-    let ptx = out.join("generalmodulo_kernels.ptx");
+    let ptx = out.join("montmul_kernels.ptx");
     let _ = std::fs::remove_file(&ptx);
     let res = cmd.output().unwrap_or_else(|e| panic!("cannot run cargo: {e}"));
     let stderr = String::from_utf8_lossy(&res.stderr);

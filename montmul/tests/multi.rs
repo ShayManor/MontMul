@@ -1,6 +1,6 @@
 mod common;
 use common::*;
-use generalmodulo::{Cpu, Gmp, Limits, ModBatch, Multi, Params, fermat};
+use montmul::{Cpu, Gmp, Limits, ModBatch, Multi, Params, fermat};
 use rug::Integer;
 use rug::rand::RandState;
 

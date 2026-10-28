@@ -3,7 +3,7 @@
 # ///
 """Throughput (bit-steps/s, log y) against slots, one line per transform length L.
 
-Usage: plot_bench.py CSV OUT.png   (CSV from `generalmodulo bench --csv`; --bare rows are skipped)
+Usage: plot_bench.py CSV OUT.png   (CSV from `montmul bench --csv`; --bare rows are skipped)
 """
 import csv
 import sys

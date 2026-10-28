@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "generalmodulo-kernels"
+name = "montmul-kernels"
 version = "0.1.0"
 dependencies = [
  "cuda-device",

@@ -1,6 +1,6 @@
-use generalmodulo::score::{ScoreConfig, score};
-use generalmodulo::transform::BatchSetup;
-use generalmodulo::{Backend, Cpu, Limits};
+use montmul::score::{ScoreConfig, score};
+use montmul::transform::BatchSetup;
+use montmul::{Backend, Cpu, Limits};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;

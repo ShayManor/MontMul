@@ -1,13 +1,13 @@
 //! Command-line front end:
 //!
-//!   generalmodulo bench --backend cpu|gpu|gmp --bits B --slots S --steps K [--bare] [--csv PATH]
-//!   generalmodulo prp --index N --backend cpu|gpu|gmp
-//!   generalmodulo score --backend cpu|gpu|gmp [--slots S] [--label TEXT] [--ncu]
+//!   montmul bench --backend cpu|gpu|gmp --bits B --slots S --steps K [--bare] [--csv PATH]
+//!   montmul prp --index N --backend cpu|gpu|gmp
+//!   montmul score --backend cpu|gpu|gmp [--slots S] [--label TEXT] [--ncu]
 
 use anyhow::{Context, Result, bail, ensure};
-use generalmodulo::score::{GMP_M5_SECONDS_PER_MODSQ_100K, Score, ScoreConfig, arm, best_slots, score};
-use generalmodulo::seq::tribonacci;
-use generalmodulo::{Backend, Cpu, Gmp, ModBatch, fermat};
+use montmul::score::{GMP_M5_SECONDS_PER_MODSQ_100K, Score, ScoreConfig, arm, best_slots, score};
+use montmul::seq::tribonacci;
+use montmul::{Backend, Cpu, Gmp, ModBatch, fermat};
 use rug::Integer;
 use rug::rand::RandState;
 use std::collections::HashMap;
@@ -17,7 +17,7 @@ use std::str::FromStr;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "gpu")]
-use generalmodulo::{Multi, gpu::Gpu};
+use montmul::{Multi, gpu::Gpu};
 
 /// Per subcommand: the `--key value` options, then the bare `--flag`s it accepts.
 fn allowed(cmd: &str) -> (&'static [&'static str], &'static [&'static str]) {
@@ -204,7 +204,7 @@ fn candidates(backend: &str) -> Result<Vec<usize>> {
         #[cfg(feature = "gpu")]
         "gpu" => {
             let sms: usize = Gpu::all()?.iter().map(Gpu::sm_count).sum();
-            let (moduli, _) = generalmodulo::score::workload(&ScoreConfig::standard(1))?;
+            let (moduli, _) = montmul::score::workload(&ScoreConfig::standard(1))?;
             Ok([1, 2, 4, 8, 16]
                 .map(|f| f * sms)
                 .into_iter()
@@ -257,7 +257,7 @@ fn run_score(args: &Args) -> Result<()> {
         // Device 0 alone, at the slot count it ran in the score.
         let per_device = s.slots.div_ceil(Gpu::device_count()?);
         let cfg = ScoreConfig::standard(per_device);
-        s.overhead = Some(generalmodulo::score::gpu_overhead(|| Gpu::new().expect("CUDA device"), &cfg)?);
+        s.overhead = Some(montmul::score::gpu_overhead(|| Gpu::new().expect("CUDA device"), &cfg)?);
         // A failed profile (e.g. no counter access) leaves the columns empty and keeps the score.
         match args.flag("ncu").then(|| ncu_metrics(per_device)) {
             Some(Ok((sm, mem))) => (Some(sm), Some(mem)),
@@ -298,7 +298,7 @@ fn run_score(args: &Args) -> Result<()> {
 
 fn main() -> Result<()> {
     let argv: Vec<String> = std::env::args().skip(1).collect();
-    let Some((cmd, rest)) = argv.split_first() else { bail!("usage: generalmodulo bench|prp|score [options]") };
+    let Some((cmd, rest)) = argv.split_first() else { bail!("usage: montmul bench|prp|score [options]") };
     let args = Args::parse(cmd, rest)?;
     match cmd.as_str() {
         "bench" => {
@@ -332,7 +332,7 @@ fn main() -> Result<()> {
         #[cfg(feature = "gpu")]
         "ncu-launch" => {
             let cfg = ScoreConfig::standard(args.num("slots")?);
-            let (moduli, exps) = generalmodulo::score::workload(&cfg)?;
+            let (moduli, exps) = montmul::score::workload(&cfg)?;
             let mut batch = ModBatch::new(Gpu::new()?, &moduli, 3)?;
             arm(&mut batch, &exps);
             batch.run(16);

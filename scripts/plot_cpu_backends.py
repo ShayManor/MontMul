@@ -4,7 +4,7 @@
 """Microseconds per step per slot of the CPU backends, grouped by device, with the spec's GMP
 reference of 448 µs per squaring at 87,914 bits as a dashed line.
 
-Usage: plot_cpu_backends.py OUT.png CSV...   (CSVs from `generalmodulo bench --csv`; the median
+Usage: plot_cpu_backends.py OUT.png CSV...   (CSVs from `montmul bench --csv`; the median
 of repeated rows per device and backend is plotted)
 """
 import csv
