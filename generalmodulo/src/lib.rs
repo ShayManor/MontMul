@@ -3,11 +3,16 @@
 
 pub mod batch;
 pub mod cpu;
-#[cfg(feature = "cuda")]
-pub mod cuda;
 pub mod field;
+pub mod gmp;
+pub mod gpu;
+pub mod score;
+pub mod seq;
 pub mod transform;
 
 pub use batch::{ModBatch, Params, fermat};
 pub use cpu::Cpu;
-pub use transform::{Backend, Transform};
+pub use gmp::Gmp;
+#[cfg(feature = "gpu")]
+pub use gpu::{Gpu, GpuOptions};
+pub use transform::{Backend, Limits, Transform};

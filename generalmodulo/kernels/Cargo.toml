@@ -1,0 +1,14 @@
+[package]
+name = "generalmodulo-kernels"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Built only by `cargo oxide` (see ../build.rs), never as part of the host crate.
+[workspace]
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+cuda-device = { git = "https://github.com/NVlabs/cuda-oxide", rev = "a4a939a9b5f01f3bf712e92386922e1bc7c434a9" }

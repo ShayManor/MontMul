@@ -27,3 +27,7 @@ rustc-ice-*.txt
 spec.md
 CLAUDE.md
 docs/
+.superpowers/
+
+# Benchmark output
+figures/

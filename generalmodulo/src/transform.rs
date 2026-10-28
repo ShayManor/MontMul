@@ -8,16 +8,23 @@
 //!
 //! `Backend` adds the fused modular step that `ModBatch` drives.
 
-pub trait Transform {
+pub trait Limits {
+    /// Product of the transform moduli; convolution coefficients must stay below it.
+    fn coefficient_bound(&self) -> u128;
+    /// Lengths this backend supports, ascending.
+    fn supported_lengths(&self) -> &[usize];
+    /// True if batches must use k = L/2 limbs (R = 2^(w · L/2)), as the wraparound correction needs.
+    fn full_k(&self) -> bool {
+        false
+    }
+}
+
+pub trait Transform: Limits {
     /// Transform-domain data for `count` vectors of one length.
     type Buf;
     /// Per-vector small scalars.
     type Scales;
 
-    /// Product of the transform moduli; convolution coefficients must stay below it.
-    fn coefficient_bound(&self) -> u128;
-    /// Lengths this backend supports, ascending.
-    fn supported_lengths(&self) -> &[usize];
     /// Uploads `count` coefficient vectors of length `len` (row-major), untransformed.
     fn upload(&self, coeffs: &[u32], len: usize, count: usize) -> Self::Buf;
     /// Downloads untransformed data as exact coefficients in [0, Q) (CRT applied).
@@ -51,7 +58,7 @@ pub struct BatchSetup<'a> {
     pub two_n: &'a [Vec<u32>],
 }
 
-pub trait Backend: Transform {
+pub trait Backend: Limits {
     type State;
 
     fn create(&self, setup: &BatchSetup) -> anyhow::Result<Self::State>;

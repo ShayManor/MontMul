@@ -1,8 +1,9 @@
 //! Backend-generic correctness tests (spec section 10); every check compares against GMP.
 #![allow(dead_code)]
 
-use generalmodulo::batch::to_limbs;
-use generalmodulo::{Backend, ModBatch, Params};
+use generalmodulo::batch::{from_limbs, to_limbs};
+pub use generalmodulo::seq::tribonacci;
+use generalmodulo::{Backend, ModBatch, Params, Transform};
 use rug::rand::RandState;
 use rug::{Assign, Integer};
 
@@ -20,7 +21,7 @@ fn expected(x: &Integer, c: u32, n: &Integer, k: usize) -> Integer {
 }
 
 /// 1. All-ones limbs at maximum k for every L up to `max_len`: the convolution is exact.
-pub fn exactness<B: Backend>(b: &B, max_len: usize) {
+pub fn exactness<B: Transform>(b: &B, max_len: usize) {
     for &len in b.supported_lengths().iter().filter(|&&l| l <= max_len) {
         let k = len / 2;
         let c = 4u32;
@@ -51,12 +52,49 @@ pub fn exactness<B: Backend>(b: &B, max_len: usize) {
     }
 }
 
+/// 1b. Three vectors per call with their own random inputs and scales [1, 3, 4], then no scale:
+/// each product must match GMP, so a transform that ignores `count` or reuses scale 0 fails.
+pub fn transform_batched<B: Transform>(b: &B, max_len: usize) {
+    let mut rng = RandState::new();
+    for &len in b.supported_lengths().iter().filter(|&&l| l <= max_len) {
+        let (k, count) = (len / 2, 3);
+        let mut coeffs = vec![vec![0u32; len * count]; 2];
+        for c in coeffs.iter_mut() {
+            for v in 0..count {
+                for q in 0..k {
+                    c[v * len + q] = Integer::from(Integer::random_bits(32, &mut rng)).to_u32().unwrap();
+                }
+            }
+        }
+        for scales in [Some([1u32, 3, 4]), None] {
+            let mut x = b.upload(&coeffs[0], len, count);
+            b.forward(&mut x, len, count);
+            let mut y = b.upload(&coeffs[1], len, count);
+            b.forward(&mut y, len, count);
+            let s = scales.map(|s| b.upload_scales(&s));
+            let mut out = b.upload(&vec![0; len * count], len, count);
+            b.pointwise(&mut out, &x, &y, s.as_ref(), len, count);
+            b.inverse(&mut out, len, count);
+            let got = b.download(&out);
+            for v in 0..count {
+                let mut val = Integer::new();
+                for (q, &c) in got[v * len..(v + 1) * len].iter().enumerate() {
+                    val += Integer::from(c) << (32 * q as u32);
+                }
+                let a = from_limbs(&coeffs[0][v * len..(v + 1) * len]);
+                let bb = from_limbs(&coeffs[1][v * len..(v + 1) * len]);
+                let c = scales.map_or(1, |s| s[v]);
+                assert_eq!(val, a * bb * c, "len {len} vector {v} scales {scales:?}");
+            }
+        }
+    }
+}
+
 /// 2. Random odd N of `bits`, random x in [0, 2N), one step each with c = 1 and c = base.
-pub fn random_modmul<B: Backend>(make: impl Fn() -> B, bits: u32, cases: usize, seed: u32) {
+pub fn random_modmul<B: Backend>(make: impl Fn() -> B, bits: u32, cases: usize, seed: u32, base: u32) {
     let mut rng = RandState::new();
     rng.seed(&Integer::from(seed));
     let moduli: Vec<Integer> = (0..cases).map(|_| rand_odd(&mut rng, bits)).collect();
-    let base = 3;
     let mut batch = ModBatch::new(make(), &moduli, base).unwrap();
     let k = batch.params().k;
     let xs: Vec<Integer> = moduli
@@ -82,18 +120,18 @@ pub fn random_modmul<B: Backend>(make: impl Fn() -> B, bits: u32, cases: usize, 
 }
 
 /// 3. Edge values x = 0, N, 2N − 1, and N with k · w = b + 4 exactly.
-pub fn edges<B: Backend>(make: impl Fn() -> B) {
+pub fn edges<B: Backend>(make: impl Fn() -> B, base: u32) {
     let mut rng = RandState::new();
     // b = 32k − 4 gives k · w = b + 4; also the largest and smallest b for several L.
     let mut sizes = vec![28u32, 60, 124, 252, 1020, 4092, 32764];
-    for len in [64usize, 1024, 8192] {
+    for len in (3..=16).map(|m| 1usize << m) {
         let kmax = len / 2;
         sizes.push(32 * kmax as u32 - 4); // top of the bucket
         sizes.push(32 * (kmax / 2) as u32 - 3); // bottom of the bucket
     }
     for bits in sizes {
         let moduli = vec![rand_odd(&mut rng, bits), (Integer::from(1) << bits) - 1u32];
-        let mut batch = ModBatch::new(make(), &moduli, 3).unwrap();
+        let mut batch = ModBatch::new(make(), &moduli, base).unwrap();
         let k = batch.params().k;
         for which in 0..3 {
             for (i, n) in moduli.iter().enumerate() {
@@ -114,7 +152,7 @@ pub fn edges<B: Backend>(make: impl Fn() -> B) {
                 };
                 let raw = batch.read_raw(i);
                 assert!(raw < n.clone() * 2u32, "lazy range bits {bits}");
-                assert_eq!(raw.modulo(n), expected(&x, 3, n, k), "bits {bits} case {which}");
+                assert_eq!(raw.modulo(n), expected(&x, base, n, k), "bits {bits} case {which}");
             }
         }
     }
@@ -181,16 +219,48 @@ pub fn powmod_and_mul<B: Backend>(make: impl Fn() -> B, bits: u32, count: usize)
     assert_eq!(batch.read(0), (a.clone() * &a).modulo(&n));
 }
 
-/// Tribonacci T(n) with T(0) = T(1) = 0, T(2) = 1 (OEIS A000073).
-pub fn tribonacci(n: usize) -> Integer {
-    let (mut a, mut b, mut c) = (Integer::from(0), Integer::from(0), Integer::from(1));
-    for _ in 0..n {
-        let d = Integer::from(&a + &b) + &c;
-        a = b;
-        b = c;
-        c = d;
+/// Random exponent of exactly `bits` bits.
+fn rand_exponent(rng: &mut RandState, bits: usize) -> Integer {
+    let mut e = Integer::from(Integer::random_bits(bits as u32, rng));
+    e.set_bit(bits as u32 - 1, true);
+    e
+}
+
+/// Two backends on the same moduli, `load(1)` and `steps`-bit exponents end with equal raw limbs.
+pub fn assert_same_raw<A: Backend, B: Backend>(a: impl Fn() -> A, b: impl Fn() -> B, bits: u32, slots: usize, steps: usize) {
+    let mut rng = RandState::new();
+    let moduli: Vec<Integer> = (0..slots).map(|_| rand_odd(&mut rng, bits)).collect();
+    let exps: Vec<Integer> = (0..slots).map(|_| rand_exponent(&mut rng, steps)).collect();
+    let mut x = ModBatch::new(a(), &moduli, 3).unwrap();
+    let mut y = ModBatch::new(b(), &moduli, 3).unwrap();
+    for (i, e) in exps.iter().enumerate() {
+        x.load(i, &Integer::from(1));
+        x.set_exponent(i, e);
+        y.load(i, &Integer::from(1));
+        y.set_exponent(i, e);
     }
-    a
+    x.run(steps);
+    y.run(steps);
+    for i in 0..slots {
+        assert_eq!(x.read_raw(i), y.read_raw(i), "bits {bits} slot {i}");
+    }
+}
+
+/// One `run(ebits)` over `ebits`-bit exponents from `load(1)` gives 3^e mod N in every slot.
+pub fn long_run<B: Backend>(make: impl Fn() -> B, bits: u32, slots: usize, ebits: usize) {
+    let mut rng = RandState::new();
+    let moduli: Vec<Integer> = (0..slots).map(|_| rand_odd(&mut rng, bits)).collect();
+    let exps: Vec<Integer> = (0..slots).map(|_| rand_exponent(&mut rng, ebits)).collect();
+    let mut batch = ModBatch::new(make(), &moduli, 3).unwrap();
+    for (i, e) in exps.iter().enumerate() {
+        batch.load(i, &Integer::from(1));
+        batch.set_exponent(i, e);
+    }
+    batch.run(ebits);
+    for (i, n) in moduli.iter().enumerate() {
+        assert_eq!(batch.remaining(i), 0, "slot {i}");
+        assert_eq!(batch.read(i), Integer::from(3).pow_mod(&exps[i], n).unwrap(), "bits {bits} slot {i}");
+    }
 }
 
 /// 6. Fermat base 3 on T(n) matches pow_mod; listed tribonacci PRPs report PRP.
@@ -249,7 +319,10 @@ pub fn api_contract<B: Backend>(make: impl Fn() -> B) {
         assert!(p.k * 32 >= bits as usize + 4 && (p.k - 1) * 32 < bits as usize + 4);
         assert!(p.len >= 2 * p.k && (p.len == lengths[0] || p.len / 2 < 2 * p.k));
     }
-    assert!(Params { k: 1 << 30, len: 1 << 31 }.check_exact(4, make().coefficient_bound()).is_err());
+    // An exact backend (bound u128::MAX) has no k to reject.
+    if make().coefficient_bound() < u128::MAX {
+        assert!(Params { k: 1 << 30, len: 1 << 31 }.check_exact(4, make().coefficient_bound()).is_err());
+    }
     // Tiny moduli, load of values ≥ N and negative values, canonical read, is_one.
     let mut rng = RandState::new();
     for n in [3u32, 5, 7, 9, 15, 101, 65_537, 4_294_967_291, u32::MAX] {
@@ -315,7 +388,7 @@ pub fn carry_stress<B: Backend>(make: impl Fn() -> B, max_len: usize) {
         b.run(32);
         let k = b.params().k as u32;
         for (i, m) in [&n, &n2].into_iter().enumerate() {
-            // From x̃ = 2N − 1 ≡ −1: the canonical value is (−R⁻¹)^(2^32) · 3^e · ... computed directly.
+            // x̃ = 2N − 1 ≡ −1, so x = −R⁻¹ mod N.
             let rinv = (Integer::from(1) << (32 * k)).invert(m).unwrap();
             let x = (m.clone() - rinv).modulo(m);
             let want = (x.pow_mod(&(Integer::from(1) << 32u32), m).unwrap() * Integer::from(3).pow_mod(&e, m).unwrap()).modulo(m);

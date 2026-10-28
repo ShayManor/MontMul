@@ -2,6 +2,7 @@
 
 use crate::transform::{Backend, BatchSetup};
 use anyhow::{Result, bail, ensure};
+use rayon::prelude::*;
 use rug::Integer;
 
 /// Limb width w.
@@ -74,19 +75,29 @@ impl<B: Backend> ModBatch<B> {
                 }
             });
         }
-        let params = params.unwrap();
+        let mut params = params.unwrap();
+        if backend.full_k() {
+            params.k = params.len / 2;
+        }
         params.check_exact(base, backend.coefficient_bound())?;
         let k = params.k;
         let r = Integer::from(1) << (k as u32 * W);
-        let mut ms = Vec::new();
-        let (mut nl, mut npl, mut tnl) = (Vec::new(), Vec::new(), Vec::new());
-        for n in moduli {
-            let ninv = n.clone().invert(&r).unwrap();
-            let nprime = (r.clone() - ninv) % &r;
-            nl.push(to_limbs(n, k));
-            npl.push(to_limbs(&nprime, k));
-            tnl.push(to_limbs(&(n.clone() * 2u32), k));
-            ms.push(Modulus { n: n.clone(), r: r.clone() % n, rinv: r.clone().invert(n).unwrap() });
+        // Two modular inversions per modulus dominate the setup of large batches: one per thread.
+        let per: Vec<_> = moduli
+            .par_iter()
+            .map(|n| {
+                let ninv = n.clone().invert(&r).unwrap();
+                let nprime = (r.clone() - ninv) % &r;
+                let m = Modulus { n: n.clone(), r: r.clone() % n, rinv: r.clone().invert(n).unwrap() };
+                (to_limbs(n, k), to_limbs(&nprime, k), to_limbs(&(n.clone() * 2u32), k), m)
+            })
+            .collect();
+        let (mut ms, mut nl, mut npl, mut tnl) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for (a, b, c, m) in per {
+            nl.push(a);
+            npl.push(b);
+            tnl.push(c);
+            ms.push(m);
         }
         let setup = BatchSetup { k, len: params.len, base, n: &nl, nprime: &npl, two_n: &tnl };
         let state = backend.create(&setup)?;
@@ -105,6 +116,10 @@ impl<B: Backend> ModBatch<B> {
     pub fn backend(&self) -> &B {
         &self.backend
     }
+    /// The backend with this batch's state, for backend-specific entry points such as `Gpu::run_bare`.
+    pub fn backend_and_state(&mut self) -> (&B, &mut B::State) {
+        (&self.backend, &mut self.state)
+    }
 
     /// Uploads x (any integer) to slot `i` in Montgomery form.
     pub fn load(&mut self, i: usize, x: &Integer) {
@@ -116,6 +131,7 @@ impl<B: Backend> ModBatch<B> {
 
     /// Writes a raw Montgomery-form value in [0, 2N), for tests of the lazy range.
     pub fn load_raw(&mut self, i: usize, xm: &Integer) {
+        assert!(*xm >= 0 && *xm < self.moduli[i].n.clone() * 2u32, "raw value outside [0, 2N)");
         let limbs = to_limbs(xm, self.params.k);
         self.backend.load(&mut self.state, i, &limbs);
     }
@@ -169,6 +185,7 @@ impl<B: Backend> ModBatch<B> {
 
 /// Fermat base-`base` PRP test of every modulus: loads 1, runs N − 1, checks for 1.
 pub fn fermat<B: Backend>(backend: B, moduli: &[Integer], base: u32, chunk: usize) -> Result<Vec<bool>> {
+    ensure!(chunk > 0, "chunk must be positive");
     let mut b = ModBatch::new(backend, moduli, base)?;
     for (i, n) in moduli.iter().enumerate() {
         b.load(i, &Integer::from(1));

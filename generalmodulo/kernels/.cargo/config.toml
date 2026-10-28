@@ -1,0 +1,4 @@
+# cuda-oxide loads its codegen backend through unstable rustc flags. This file is read only
+# by cargo invocations rooted in this directory, so the host crate never sees it.
+[env]
+RUSTC_BOOTSTRAP = "1"
