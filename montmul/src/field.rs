@@ -1,6 +1,6 @@
 //! Arithmetic in GF(M31²) and GF(M61²) with i² = −1, roots of unity, twiddle tables and CRT.
 //!
-//! Both primes are ≡ 3 mod 4, so −1 is a non-residue and GF(p²) = GF(p)[i]. The 2-Sylow
+//! Both primes are ≡ 3 mod 4, so −1 is a non-residue and GF(p²) = GF(p)\[i\]. The 2-Sylow
 //! subgroup of GF(p²)* has order 2^(e) with e = 32 for M31 and e = 62 for M61, which gives
 //! power-of-two transforms of any length used here.
 

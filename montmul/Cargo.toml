@@ -2,6 +2,13 @@
 name = "montmul"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+description = "Batched Montgomery modular multiplication for many odd moduli on CUDA GPUs and CPUs, through an M31 x M61 number-theoretic transform"
+license = "BSD-3-Clause"
+repository = "https://github.com/ShayManor/MontMul"
+readme = "../README.md"
+keywords = ["montgomery", "modular", "ntt", "cuda", "primality"]
+categories = ["mathematics", "algorithms"]
 
 [features]
 gpu = ["dep:cudarc"]

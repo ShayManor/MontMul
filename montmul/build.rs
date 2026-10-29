@@ -1,6 +1,8 @@
 //! With feature `gpu`, compiles the kernel crate `kernels/` to PTX through `cargo oxide` and
 //! writes it to OUT_DIR, where `src/gpu/device.rs` embeds it. The kernel build runs from the
 //! kernel crate's directory, so its toolchain pin and `RUSTC_BOOTSTRAP` never reach this crate.
+//! The published crate has no `kernels/` (Cargo leaves out nested packages) and embeds the
+//! PTX shipped in `ptx/` instead.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -10,11 +12,18 @@ fn main() {
     if std::env::var_os("CARGO_FEATURE_GPU").is_none() {
         return;
     }
-    let kernels = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("kernels");
+    let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let (kernels, shipped) = (manifest.join("kernels"), manifest.join("ptx/montmul_kernels.ptx"));
+    let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let ptx = out.join("montmul_kernels.ptx");
+    println!("cargo:rerun-if-changed={}", shipped.display());
+    if !kernels.join("Cargo.toml").exists() {
+        std::fs::copy(&shipped, &ptx).unwrap_or_else(|e| panic!("cannot copy {}: {e}", shipped.display()));
+        return;
+    }
     for f in ["src", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo/config.toml"] {
         println!("cargo:rerun-if-changed={}", kernels.join(f).display());
     }
-    let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     // OUT_DIR is <target>/<profile>/build/<package>-<hash>/out; one kernel target directory
     // per host target directory keeps the kernel dependencies compiled once.
     let target = out.ancestors().nth(4).unwrap().join("kernels");
@@ -34,10 +43,10 @@ fn main() {
             cmd.env_remove(&key);
         }
     }
-    cmd.env("CARGO_TARGET_DIR", &target).env("CUDA_OXIDE_PTX_DIR", &out);
-    // A stale PTX must not pass the existence check below.
-    let ptx = out.join("montmul_kernels.ptx");
-    let _ = std::fs::remove_file(&ptx);
+    // cargo oxide writes the PTX only when it recompiles the kernels, so it goes to a directory
+    // that outlives this OUT_DIR and is copied from there.
+    let built = target.join("ptx").join("montmul_kernels.ptx");
+    cmd.env("CARGO_TARGET_DIR", &target).env("CUDA_OXIDE_PTX_DIR", built.parent().unwrap());
     let res = cmd.output().unwrap_or_else(|e| panic!("cannot run cargo: {e}"));
     let stderr = String::from_utf8_lossy(&res.stderr);
     if !res.status.success() {
@@ -50,5 +59,8 @@ fn main() {
             String::from_utf8_lossy(&res.stdout),
         );
     }
-    assert!(ptx.exists(), "kernel build succeeded but wrote no {}\n{stderr}", ptx.display());
+    std::fs::copy(&built, &ptx).unwrap_or_else(|e| panic!("kernel build succeeded but wrote no {} ({e}); `cargo clean` forces a rebuild\n{stderr}", built.display()));
+    if std::fs::read(&built).ok() != std::fs::read(&shipped).ok() {
+        println!("cargo:warning=ptx/montmul_kernels.ptx differs from the kernels just built; copy {} there before publishing", built.display());
+    }
 }

@@ -54,10 +54,10 @@ Swap `Gmp::default()` for `Cpu::default()` or `Gpu::new()?` (feature `gpu`) to c
 ```
 montmul bench --backend cpu|gpu|gmp --bits B --slots S --steps K [--bare] [--csv PATH]
 montmul prp   --index N --backend cpu|gpu|gmp
-montmul score --backend cpu|gpu|gmp [--slots S] [--label TEXT] [--ncu]
+montmul score --backend cpu|gpu|gmp [--slots S] [--label TEXT] [--ncu] [--csv PATH]
 ```
 
-`bench` times `K` steps on `S` random `B`-bit moduli after a 16-step warm-up and prints one `key=value` line (µs per slot-step, bit-steps per second); `--csv` appends the same fields to a file. `--bare` (GPU only) times the squaring alone, without the reduction. `prp` runs a Fermat base-3 test on the tribonacci number T(N). `score` measures the efficiency score above, prints it and appends it to `figures/score_<device>.csv`; on the GPU it also reports the reduction overhead (time of a full step over a bare one), and `--ncu` adds Nsight Compute SM and memory throughput. The `gpu` backend uses every visible device (`CUDA_VISIBLE_DEVICES` selects them); `--bare`, the reduction overhead and `--ncu` use device 0.
+`bench` times `K` steps on `S` random `B`-bit moduli after a 16-step warm-up and prints one `key=value` line (µs per slot-step, bit-steps per second); `--csv` appends the same fields to a file. `--bare` (GPU only) times the squaring alone, without the reduction. `prp` runs a Fermat base-3 test on the tribonacci number T(N). `score` measures the efficiency score above and prints it, and `--csv` appends it to a file; on the GPU it also reports the reduction overhead (time of a full step over a bare one), and `--ncu` adds Nsight Compute SM and memory throughput. The `gpu` backend uses every visible device (`CUDA_VISIBLE_DEVICES` selects them); `--bare`, the reduction overhead and `--ncu` use device 0.
 
 ## How it works
 
@@ -85,7 +85,7 @@ The Rust crate lives in `montmul/` and has three backends behind one host API, `
 
 ## Building and testing
 
-All commands run in `montmul/`. Without a GPU (macOS or Linux), the crate builds on plain stable Rust with `cargo build --release`. The GPU build (`cargo build --release --features gpu`) needs Linux, a driver of version 580 or later, CUDA 13, LLVM 21, Rust 1.99.1 and `cargo-oxide`.
+From crates.io, `cargo add montmul` adds the CPU backends and `cargo add montmul --features gpu` the GPU ones. In a checkout, all commands run in `montmul/`. Without a GPU (macOS or Linux), the crate builds on stable Rust 1.88 or later with `cargo build --release`. The GPU build (`cargo build --release --features gpu`) needs Linux, a driver of version 580 or later and CUDA 13; rebuilding the kernels in a checkout also needs LLVM 21, Rust 1.99.1 and `cargo-oxide`.
 
 | hardware | backend |
 |-|-|
@@ -117,7 +117,7 @@ cd <repo>/montmul/kernels && cargo oxide doctor   # expect "Environment looks go
 
 GMP needs `m4`. The export line must be in effect for every later build. On a host without root, install the CUDA 13 toolkit with its runfile (`--toolkit --installpath=$HOME/cuda-13`) and the LLVM 21 release tarball under `$HOME`, then point the same variables there. Run `cargo oxide doctor` inside `kernels/`, because the cuda-oxide checkout pins a different toolchain at its root.
 
-With feature `gpu`, `build.rs` runs `cargo oxide build` in `kernels/` and embeds the resulting PTX. `kernels/rust-toolchain.toml` pins Rust 1.99.1 for that directory only. `kernels/.cargo/config.toml` sets `RUSTC_BOOTSTRAP=1` there, because cuda-oxide loads its codegen backend through unstable rustc flags; the host crate never sees it and builds on stable. cudarc needs Rust 1.88 or later, so on a host whose default stable is older every host command takes `cargo +1.99.1`.
+With feature `gpu`, `build.rs` runs `cargo oxide build` in `kernels/` and embeds the resulting PTX. The published crate has no `kernels/` and embeds `ptx/montmul_kernels.ptx` instead; a checkout build warns when that copy differs from the kernels it just built, so refresh it before publishing. `kernels/rust-toolchain.toml` pins Rust 1.99.1 for that directory only. `kernels/.cargo/config.toml` sets `RUSTC_BOOTSTRAP=1` there, because cuda-oxide loads its codegen backend through unstable rustc flags; the host crate never sees it and builds on stable. cudarc needs Rust 1.88 or later, so on a host whose default stable is older every host command takes `cargo +1.99.1`.
 
 </details>
 

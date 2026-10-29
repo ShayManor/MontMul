@@ -2,7 +2,7 @@
 //!
 //!   montmul bench --backend cpu|gpu|gmp --bits B --slots S --steps K [--bare] [--csv PATH]
 //!   montmul prp --index N --backend cpu|gpu|gmp
-//!   montmul score --backend cpu|gpu|gmp [--slots S] [--label TEXT] [--ncu]
+//!   montmul score --backend cpu|gpu|gmp [--slots S] [--label TEXT] [--ncu] [--csv PATH]
 
 use anyhow::{Context, Result, bail, ensure};
 use montmul::score::{GMP_M5_SECONDS_PER_MODSQ_100K, Score, ScoreConfig, arm, best_slots, score};
@@ -24,7 +24,7 @@ fn allowed(cmd: &str) -> (&'static [&'static str], &'static [&'static str]) {
     match cmd {
         "bench" => (&["backend", "bits", "slots", "steps", "csv"], &["bare"]),
         "prp" => (&["index", "backend"], &[]),
-        "score" => (&["backend", "slots", "label"], &["ncu"]),
+        "score" => (&["backend", "slots", "label", "csv"], &["ncu"]),
         "ncu-launch" => (&["slots"], &[]),
         _ => (&[], &[]),
     }
@@ -291,9 +291,11 @@ fn run_score(args: &Args) -> Result<()> {
         ("gmp_core_equiv", opt(gmp_core_equiv)),
     ];
     println!("{}", fields.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(" "));
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../figures").join(format!("score_{}.csv", device.to_lowercase()));
-    let header: Vec<&str> = fields.iter().map(|f| f.0).collect();
-    append_csv(&path, &header, &fields.map(|f| f.1))
+    if let Some(path) = args.get("csv") {
+        let header: Vec<&str> = fields.iter().map(|f| f.0).collect();
+        append_csv(Path::new(path), &header, &fields.map(|f| f.1))?;
+    }
+    Ok(())
 }
 
 fn main() -> Result<()> {

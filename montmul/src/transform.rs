@@ -33,7 +33,7 @@ pub trait Transform: Limits {
     /// In-place, batched over `count` vectors of length `len`.
     fn forward(&self, data: &mut Self::Buf, len: usize, count: usize);
     fn inverse(&self, data: &mut Self::Buf, len: usize, count: usize);
-    /// out[i] = scale[i] · a[i] ⊙ b[i].
+    /// `out[i] = scale[i] · a[i] ⊙ b[i]`.
     fn pointwise(
         &self,
         out: &mut Self::Buf,
