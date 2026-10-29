@@ -2,7 +2,7 @@
 
 MontMul computes `x ← x² · c mod N` and `a · b mod N` for many independent odd moduli N at once. This modular squaring is the inner step of a Fermat probable-prime test `3^(N−1) mod N`, which runs one step per bit of N.
 
-![Fermat tests per hour against modulus size](assets/headline.png)
+![Fermat tests per hour against modulus size](https://raw.githubusercontent.com/ShayManor/MontMul/main/assets/headline.png)
 
 ## Results
 
